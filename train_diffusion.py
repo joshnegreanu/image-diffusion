@@ -8,18 +8,22 @@ import pandas as pd
 import random
 import wandb
 
+import deepinv
+
 import sys
 import signal
 from functools import partial
+import torchvision.transforms as transforms
 
 from torch import nn, optim
 from torch.optim.lr_scheduler import LinearLR, CosineAnnealingLR, SequentialLR
 from torch.utils.data import DataLoader, Dataset, ConcatDataset
+from torchvision import datasets, transforms
 
 from datetime import datetime
 from tqdm import tqdm
 
-from models.ConvolutionalUNet import ConvolutionalUNet
+from models.UNet import UNet
 from data.ImageDataset import ImageDataset
 
 # dynamically select device
@@ -36,17 +40,22 @@ Training and model configurations.
 Can be changed prior to training.
 """
 train_config = {
-    'max_examples': 1000,
+    'max_examples': 60000,
     'image_size': 32,
-    'num_channels': 1,
-    'bs': 16,
-    'lr': 0.0001,
+    'bs': 32,
+    'lr': 0.00002,
     'weight_decay': 0.000001,
-    'max_epochs': 10,
-    'diffusion_scheduler': math.sqrt
+    'max_epochs': 100
 }
 
-model_config = {}
+model_config = {
+    'in_channels': 1,
+    'out_channels': 1,
+    'channels': [64, 128, 256, 512, 512, 384, 256],
+    'scales': [-1, -1, -1, 1, 1, 1, 0],
+    'attentions': [False, True, False, False, False, True, False],
+    'time_steps': 1000
+}
 
 
 """
@@ -59,10 +68,11 @@ dry_run
         bs: int batch size
         image_size: int size of vocab
 """
-def dry_run(model, bs, image_size, num_channels):
-    batch = torch.randn(bs, num_channels, image_size, image_size).to(device)
-    out = model(batch)
-    assert out.shape == (bs, num_channels, image_size, image_size)
+def dry_run(model, bs, image_size, in_channels, out_channels, time_steps):
+    batch = torch.randn(bs, in_channels, image_size, image_size).to(device)
+    t = random.randrange(1, time_steps, 1)
+    out = model(batch, t)
+    assert out.shape == (bs, out_channels, image_size, image_size)
     print("[dry_run] passed")
 
 
@@ -112,7 +122,7 @@ train
         model: torch.nn.Module diffusion model
         data_loader: torch.DataLoader training data
 """
-def train(model, dataloader):
+def train(model, dataloader, time_steps):
     # set up wandb and checkpoint path
     now = datetime.now()
     project_name = "diffusion-image-model"
@@ -124,6 +134,12 @@ def train(model, dataloader):
     # optimizer and criterion
     optimizer = optim.AdamW(model.parameters(), lr=train_config['lr'], weight_decay=train_config['weight_decay'])
     criterion = nn.MSELoss()
+    # criterion = deepinv.loss.MSE(reduction='mean')
+
+    # diffusion scheduler
+    beta = torch.linspace(1e-4, 0.02, time_steps, requires_grad=False).to(device)
+    alpha = 1 - beta
+    alpha_hat = torch.cumprod(alpha, dim=0).requires_grad_(False).to(device)
 
     # construct linear warmup and cosine annealing cooldown
     warmup_epochs = int(train_config['max_epochs'] / 10)
@@ -157,21 +173,23 @@ def train(model, dataloader):
         for batch_idx, batch in enumerate(dataloader):
             wandb.log({'learning-rate': scheduler.get_last_lr()[0]}, step=iteration)
 
-            # pick nosing rate
-            t = random.uniform(0.01, 0.99)
-            alpha_t = train_config['diffusion_scheduler'](t)
+            # break up data
+            batch, labels = batch
+
+            # pick noising rate
+            t = random.randrange(1, time_steps, 1)
 
             # run batch through diffusion
             batch = batch.to(device)
-            noise = torch.randn(batch.size(), device=batch.device, dtype=batch.dtype).to(device)
-            diffuse_batch = math.sqrt(alpha_t) * batch + math.sqrt(1 - alpha_t) * noise
+            noise = torch.randn(batch.size(), requires_grad=False).to(device)
+            diffuse_batch = math.sqrt(alpha_hat[t]) * batch + math.sqrt(1 - alpha_hat[t]) * noise
 
             # forward pass
-            noise_pred = model(diffuse_batch)
+            # noise_pred = model(diffuse_batch, t)
+            noise_pred = model(diffuse_batch, torch.ones((32,)).to(device) * t, type_t='timestep')
 
             # compute L2 loss between predicted noise and true noise
             loss = criterion(noise_pred, noise)
-            loss /= t
             epoch_loss += loss
             wandb.log({"loss": loss.item()}, step=iteration)
 
@@ -207,19 +225,56 @@ main
 """
 def main():
     # create dataset
-    dataset = ImageDataset(
-        dataset_name="p2pfl/MNIST",
-        max_examples=train_config['max_examples'],
-        image_size=train_config['image_size'],
-        bs=train_config['bs']
+    # dataset = ImageDataset(
+    #     dataset_name="p2pfl/MNIST",
+    #     max_examples=train_config['max_examples'],
+    #     image_size=train_config['image_size'],
+    #     bs=train_config['bs']
+    # )
+
+    transform = transforms.Compose([
+        transforms.Resize(train_config['image_size']),
+        transforms.ToTensor(),
+        transforms.Normalize((0.0,), (1.0,)),
+    ])
+    
+    dataloader = torch.utils.data.DataLoader(
+        datasets.MNIST(root="./data", train=True, download=True, transform=transform),
+        batch_size=train_config['bs'],
+        shuffle=True,
     )
 
     # create diffusion model
-    model = ConvolutionalUNet(num_channels=train_config['num_channels']).to(device)
-    dry_run(model, train_config['bs'], train_config['image_size'], train_config['num_channels'])
+    # model = UNet(
+    #     in_channels=model_config['in_channels'],
+    #     out_channels=model_config['out_channels'],
+    #     channels=model_config['channels'],
+    #     scales=model_config['scales'],
+    #     attentions=model_config['attentions'],
+    #     time_steps=model_config['time_steps']
+    # ).to(device)
+
+    model = deepinv.models.DiffUNet(
+        in_channels=1,
+        out_channels=1,
+        pretrained=None
+    ).to(device)
+
+    dry_run(
+        model=model,
+        bs=train_config['bs'],
+        image_size=train_config['image_size'],
+        in_channels=model_config['in_channels'],
+        out_channels=model_config['out_channels'],
+        time_steps=model_config['time_steps']
+    )
 
     # enter training cycle
-    train(model, dataset.create_dataloader())
+    train(
+        model=model,
+        dataloader=dataloader,
+        time_steps=model_config['time_steps']
+    )
 
 
 if __name__ == '__main__':

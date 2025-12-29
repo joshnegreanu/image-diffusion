@@ -44,11 +44,12 @@ class ImageDataset(Dataset):
         # run through transformation pipeline
         transform = torchvision.transforms.Compose([
             torchvision.transforms.Resize((image_size, image_size)),
-            torchvision.transforms.ToTensor()
+            torchvision.transforms.ToTensor(),
+            torchvision.transforms.Normalize((0.0,), (1.0,)),
         ])
 
-        # normalize image to [-1, 1]
-        self.data = [(transform(x['image']).float() - 0.5) * 2.0 for x in random.sample(list(dataset), max_examples)]
+        # normalize image to [0, 1]
+        self.data = [transform(x['image']) for x in random.sample(list(dataset), max_examples)]
         print("[dataset] loaded")
 
         self.image_size = image_size
