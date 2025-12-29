@@ -11,3 +11,6 @@ slurm*.out
 
 # cluster job files
 *.sbatch
+
+# data
+/data
