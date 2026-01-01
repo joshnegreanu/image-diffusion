@@ -185,8 +185,8 @@ def train(model, dataloader, time_steps):
             diffuse_batch = math.sqrt(alpha_hat[t]) * batch + math.sqrt(1 - alpha_hat[t]) * noise
 
             # forward pass
-            # noise_pred = model(diffuse_batch, t)
-            noise_pred = model(diffuse_batch, torch.ones((32,)).to(device) * t, type_t='timestep')
+            noise_pred = model(diffuse_batch, t)
+            # noise_pred = model(diffuse_batch, torch.ones((32,)).to(device) * t, type_t='timestep')
 
             # compute L2 loss between predicted noise and true noise
             loss = criterion(noise_pred, noise)
@@ -245,20 +245,20 @@ def main():
     )
 
     # create diffusion model
-    # model = UNet(
-    #     in_channels=model_config['in_channels'],
-    #     out_channels=model_config['out_channels'],
-    #     channels=model_config['channels'],
-    #     scales=model_config['scales'],
-    #     attentions=model_config['attentions'],
-    #     time_steps=model_config['time_steps']
-    # ).to(device)
-
-    model = deepinv.models.DiffUNet(
-        in_channels=1,
-        out_channels=1,
-        pretrained=None
+    model = UNet(
+        in_channels=model_config['in_channels'],
+        out_channels=model_config['out_channels'],
+        channels=model_config['channels'],
+        scales=model_config['scales'],
+        attentions=model_config['attentions'],
+        time_steps=model_config['time_steps']
     ).to(device)
+
+    # model = deepinv.models.DiffUNet(
+    #     in_channels=1,
+    #     out_channels=1,
+    #     pretrained=None
+    # ).to(device)
 
     dry_run(
         model=model,
