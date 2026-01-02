@@ -41,7 +41,7 @@ Can be changed prior to training.
 """
 train_config = {
     'max_examples': 60000,
-    'image_size': 32,
+    'image_size': 64,
     'bs': 32,
     'lr': 0.00002,
     'weight_decay': 0.000001,
@@ -49,8 +49,8 @@ train_config = {
 }
 
 model_config = {
-    'in_channels': 1,
-    'out_channels': 1,
+    'in_channels': 3,
+    'out_channels': 3,
     'channels': [64, 128, 256, 512, 512, 384, 256],
     'scales': [-1, -1, -1, 1, 1, 1, 0],
     'attentions': [False, True, False, False, False, True, False],
@@ -138,7 +138,7 @@ def train(model, dataloader, time_steps):
 
     # diffusion scheduler
     beta = torch.linspace(1e-4, 0.02, time_steps, requires_grad=False).to(device)
-    alpha = 1 - beta
+    alpha = 1.0 - beta
     alpha_hat = torch.cumprod(alpha, dim=0).requires_grad_(False).to(device)
 
     # construct linear warmup and cosine annealing cooldown
@@ -233,13 +233,21 @@ def main():
     # )
 
     transform = transforms.Compose([
-        transforms.Resize(train_config['image_size']),
+        transforms.Resize((train_config['image_size'], train_config['image_size'])),
         transforms.ToTensor(),
         transforms.Normalize((0.0,), (1.0,)),
     ])
     
+    # MNIST dataset
+    # dataloader = torch.utils.data.DataLoader(
+    #     datasets.MNIST(root="./data", train=True, download=True, transform=transform),
+    #     batch_size=train_config['bs'],
+    #     shuffle=True,
+    # )
+
+    # stanford cars dataset
     dataloader = torch.utils.data.DataLoader(
-        datasets.MNIST(root="./data", train=True, download=True, transform=transform),
+        datasets.StanfordCars(root="./data", split='train', download=False, transform=transform),
         batch_size=train_config['bs'],
         shuffle=True,
     )
