@@ -4,6 +4,7 @@ os.environ["PYTORCH_ENABLE_MPS_FALLBACK"] = "1"
 import torch
 import math
 import torch.nn as nn
+import torch.nn.functional as F
 
 from einops import rearrange
 
@@ -16,7 +17,21 @@ else:
     device = torch.device("cpu")
 
 
+"""
+PositionalEncoding
+	Generates sinusoidal positional encodings
+	for diffusion time steps.
+"""
 class PositionalEncoding(nn.Module):
+	"""
+	PositionalEncoding.__init__
+		Constructs sinusoidal positional encodings
+		for diffusion time steps.
+	
+	Args:
+		embed_dim: int size of embedding dimension
+		time_steps: int number of diffusion time steps
+	"""
 	def __init__(self, embed_dim, time_steps):
 		super().__init__()
 		self.embed_dim = embed_dim
@@ -29,48 +44,163 @@ class PositionalEncoding(nn.Module):
 		embeddings[:, 1::2] = torch.cos(positions * div)
 		self.embeddings = embeddings.to(device)
 
+
+	"""
+	PositionalEncoding.forward
+		Retrieves positional encoding for given
+		diffusion time step.
+	
+	Args:
+		t: int diffusion time step
+	
+	Returns:
+		torch.Tensor of size (D)
+	"""
 	def forward(self, t):
 		return self.embeddings[t]
 
 
-# implement attention better...
-# class Attention(nn.Module):
-# 	def __init__(self, num_channels, num_heads):
-# 		super().__init__()
-# 		self.proj1 = nn.Linear(num_channels, num_channels*3)
-# 		self.proj2 = nn.Linear(num_channels, num_channels)
-# 		self.num_heads = num_heads
+"""
+MultiheadAttention
+	Multi-headed attention with/without causal
+	masking applied.
+"""
+class MultiheadAttention(nn.Module):
+	"""
+	MultiheadAttention.__init__
+		Constructs key, query, and value matrices, and
+		final linear layer.
+	
+	Args:
+		emb_dim: int size of embedding dimension
+		num_heads: int number of attention heads
+	"""
+	def __init__(self, emb_dim, num_heads):
+		super().__init__()
 
-# 	def forward(self, x):
-# 		h, w = x.shape[2:]
-# 		x = rearrange(x, 'b c h w -> b (h w) c')
-# 		x = self.proj1(x)
-# 		x = rearrange(x, 'b L (C H K) -> K b H L C', K=3, H=self.num_heads)
-# 		q,k,v = x[0], x[1], x[2]
-# 		x = nn.functional.scaled_dot_product_attention(q, k, v, is_causal=False)
-# 		x = rearrange(x, 'b H (h w) C -> b h w (C H)', h=h, w=w)
-# 		x = self.proj2(x)
-# 		return rearrange(x, 'b h w C -> b C h w')
+		assert emb_dim % num_heads == 0
+		self.emb_dim = emb_dim
+		self.head_dim = int(emb_dim / num_heads)
+		self.num_heads = num_heads
+		
+		# set up key, query, and value linear transformations
+		self.q_linear = nn.Linear(emb_dim, emb_dim)
+		self.k_linear = nn.Linear(emb_dim, emb_dim)
+		self.v_linear = nn.Linear(emb_dim, emb_dim)
+
+		self.concat_linear = nn.Linear(emb_dim, emb_dim)
 
 
+	"""
+	MultiheadAttention.scaled_dot_product_attention
+		Applies scaled dot product attention to input
+		previously passed through key, query, and value
+		transformations.
+	
+	Args:
+		q: torch.Tensor input queries
+		k: torch.Tensor input keys
+		v: torch.Tensor input values
+		is_causal: boolean causal masking flag
+	
+	Returns:
+		torch.Tensor of size (B, N, D)
+	"""
+	def scaled_dot_product_attention(self, q, k, v, is_causal):
+		seq_len = q.shape[1]
+
+		# dot product self attention
+		q = q.transpose(1, 2)
+		k = k.transpose(1, 2)
+		v = v.transpose(1, 2)
+		dots = torch.matmul(q, k.transpose(-2, -1)) / (self.head_dim ** 0.5)
+
+		# apply causal mask if causal
+		if is_causal:
+			mask = (torch.triu(torch.ones(seq_len, seq_len)) == 1).transpose(0, 1)
+			causal_mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0)).to(device)
+			dots = dots + causal_mask
+		
+		attn = F.softmax(dots, dim=-1)
+		return torch.matmul(attn, v).transpose(1, 2).contiguous()
+
+	
+	"""
+	MultiheadAttention.forward
+		Runs a forward pass through multiheaded attention
+		layer. Splits input dimensions across heads,
+		runs through query, key, and value transformations,
+		applies scaled dot product attention, concatenates
+		and passes through a final linear layer.
+	
+	Args:
+		x: torch.Tensor of size (B, N, D)
+		is_causal: boolean causal masking flag
+	
+	Returns:
+		torch.Tensor of size (B, N, D)
+	"""
+	def forward(self, x, is_causal):
+		bs = x.shape[0]
+
+		# run through query, key, and value transformations
+		q = self.q_linear(x).view(bs, -1, self.num_heads, self.head_dim)
+		k = self.k_linear(x).view(bs, -1, self.num_heads, self.head_dim)
+		v = self.v_linear(x).view(bs, -1, self.num_heads, self.head_dim)
+
+		# calculate attentions, concatenate multiple heads
+		attn = self.scaled_dot_product_attention(q, k, v, is_causal)
+		attn = attn.reshape(bs, -1, self.emb_dim)
+		return self.concat_linear(attn)
+
+
+"""
+ResBlock
+	Residual block with two convolutional layers.
+"""
 class ResBlock(nn.Module):
+	"""
+	ResBlock.__init__
+		Constructs two convolutional layers
+		with ReLU activations.
+	
+	Args:
+		num_channels: int number of input/output channels
+	"""
 	def __init__(self, num_channels):
 		super().__init__()
 
 		self.block_pass = nn.Sequential(
-			# nn.GroupNorm(num_groups=32, num_channels=num_channels),
 			nn.Conv2d(in_channels=num_channels, out_channels=num_channels, kernel_size=3, padding=1),
 			nn.ReLU(inplace=True),
-			# nn.GroupNorm(num_groups=32, num_channels=num_channels),
 			nn.Conv2d(in_channels=num_channels, out_channels=num_channels, kernel_size=3, padding=1),
 			nn.ReLU(inplace=True)
 		)
 	
+
+	"""
+	ResBlock.forward
+		Runs a forward pass through the residual block,
+		applying timestep positional embedding.
+	
+	Args:
+		x: torch.Tensor input feature map
+		pos_emb: torch.Tensor positional embedding to add
+	
+	Returns:
+		torch.Tensor of size (B, C, H, W)
+	"""
 	def forward(self, x, pos_emb):
 		x = x + pos_emb[None, :, None, None]
 		return x + self.block_pass(x)
 
 
+"""
+UNetLayer
+	Single layer of a U-Net architecture, consisting
+	of two residual blocks, optional full self-attention,
+	and up-/down-sampling.
+"""
 class UNetLayer(nn.Module):
 	def __init__(self, num_channels, scale, attention):
 		super().__init__()
@@ -78,8 +208,8 @@ class UNetLayer(nn.Module):
 		self.res_block2 = ResBlock(num_channels=num_channels)
 
 		self.attention = None
-		# if attention:
-		# 	self.attention = Attention(num_channels=num_channels, num_heads=4)
+		if attention:
+			self.attention = MultiheadAttention(emb_dim=num_channels, num_heads=4)
 
 		if scale == 1:
 			self.scale = nn.ConvTranspose2d(num_channels, num_channels//2, kernel_size=4, stride=2, padding=1)
@@ -89,11 +219,28 @@ class UNetLayer(nn.Module):
 			self.scale = nn.Identity()
 
 
+	"""
+	UNetLayer.forward
+		Runs a forward pass through the U-Net layer,
+		applying two residual blocks, optional full
+		self-attention, and up-/down-sampling.
+	
+	Args:
+		x: torch.Tensor input feature map
+		pos_emb: torch.Tensor positional embedding to add
+	
+	Returns:
+		torch.Tensor of size (B, C', H', W'), torch.Tensor of size (B, C, H, W)
+	"""
 	def forward(self, x, pos_emb):
 		x = self.res_block1(x, pos_emb)
 		
+		# apply full self-attention if enabled
 		if self.attention:
-			x = self.attention(x)
+			h, w = x.shape[2], x.shape[3]
+			x = rearrange(x, 'b c h w -> b (h w) c')
+			x = self.attention(x, is_causal=False)
+			x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
 
 		x = self.res_block2(x, pos_emb)
 		return self.scale(x), x

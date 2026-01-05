@@ -18,7 +18,25 @@ else:
     device = torch.device("cpu")
 
 
+"""
+UNet
+	Implementation of a convolutional U-Net
+	architecture with attention layers.
+"""
 class UNet(nn.Module):
+	"""
+	UNet.__init__
+		Constructs a convolutional U-Net
+		architecture with attention layers.
+	
+	Args:
+		in_channels: int number of input channels
+		out_channels: int number of output channels
+		channels: list of int number of channels per layer
+		attentions: list of bool whether to use attention per layer
+		scales: list of int scaling factor per layer
+		time_steps: int number of diffusion time steps
+	"""
 	def __init__(self, in_channels, out_channels, channels, attentions, scales, time_steps):
 		super().__init__()
 		self.num_layers = len(channels[:-1])
@@ -27,6 +45,7 @@ class UNet(nn.Module):
 		self.conv_out = nn.Conv2d(channels[-1], out_channels, kernel_size=3, padding=1)
 		self.relu = nn.ReLU()
 
+		# build layers dynamically
 		for i in range(self.num_layers):
 			pos_enc = PositionalEncoding(
 				embed_dim=channels[i],
@@ -43,10 +62,24 @@ class UNet(nn.Module):
 		self.final_pos_enc = PositionalEncoding(embed_dim=channels[-1], time_steps=time_steps)
 		self.final_layer = UNetLayer(scale=scales[-1], num_channels=channels[-1], attention=attentions[i])
 	
+
+	"""
+	UNet.forward
+		Runs a forward pass through the U-Net,
+		applying skip connections.
+	
+	Args:
+		x: torch.Tensor input feature map
+		t: torch.Tensor diffusion time step
+	
+	Returns:
+		torch.Tensor of size (B, out_channels, H, W)
+	"""
 	def forward(self, x, t):
 		x = self.conv_in(x)
 
 		residuals = []
+		# downsampling path
 		for i in range(self.num_layers // 2):
 			pos_enc = getattr(self, f'pos_enc{i+1}')
 			layer = getattr(self, f'layer{i+1}')
@@ -54,6 +87,7 @@ class UNet(nn.Module):
 			x, y = layer(x, pos_emb)
 			residuals.append(y)
 
+		# upsampling path (with skip connections)
 		for i in range(self.num_layers // 2, self.num_layers):
 			pos_enc = getattr(self, f'pos_enc{i+1}')
 			layer = getattr(self, f'layer{i+1}')
@@ -62,6 +96,7 @@ class UNet(nn.Module):
 			y = residuals[self.num_layers - i - 1]
 			x = torch.concat((x, y), dim=1)
 		
+		# final layer
 		pos_emb = self.final_pos_enc(t)
 		x = self.final_layer(x, pos_emb)[0]
 		x = self.relu(x)
