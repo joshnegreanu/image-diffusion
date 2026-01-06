@@ -7,7 +7,7 @@ import torch.nn as nn
 
 from einops import rearrange
 
-from models.utils import PositionalEncoding, UNetLayer
+from models.utils import TimestepEncoding, UNetLayer
 
 # dynamically select device
 if torch.cuda.is_available():
@@ -47,7 +47,7 @@ class UNet(nn.Module):
 
 		# build layers dynamically
 		for i in range(self.num_layers):
-			pos_enc = PositionalEncoding(
+			pos_enc = TimestepEncoding(
 				embed_dim=channels[i],
 				time_steps=time_steps
 			)
@@ -59,7 +59,7 @@ class UNet(nn.Module):
 			setattr(self, f'pos_enc{i+1}', pos_enc)
 			setattr(self, f'layer{i+1}', layer)
 		
-		self.final_pos_enc = PositionalEncoding(embed_dim=channels[-1], time_steps=time_steps)
+		self.final_pos_enc = TimestepEncoding(embed_dim=channels[-1], time_steps=time_steps)
 		self.final_layer = UNetLayer(scale=scales[-1], num_channels=channels[-1], attention=attentions[i])
 	
 

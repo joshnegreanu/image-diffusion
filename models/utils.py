@@ -19,12 +19,59 @@ else:
 
 """
 PositionalEncoding
-	Generates sinusoidal positional encodings
-	for diffusion time steps.
+	Applies positional encoding to sequential word embeddings
+	via sinusoidal encoding.
 """
 class PositionalEncoding(nn.Module):
 	"""
 	PositionalEncoding.__init__
+		Initializes encoding with proper embedding dimension.
+
+	Args:
+		embed_dim: int embedding dimensionality
+	"""
+	def __init__(self, embed_dim):
+		super().__init__()
+		self.embed_dim = embed_dim
+
+	"""
+	PositionalEncoding.forward
+		Applies sinusoidal positional encoding to input.
+	
+	Args:
+		x: torch.Tensor of size (B, N, D)
+
+	Returns:
+		torch.Tensor of size (B, N, D)
+	"""
+	def forward(self, x):
+		batch_size = x.shape[0]
+		seq_len = x.shape[1]
+
+		# calcualte sinusoidal encodings
+		pe = torch.zeros(1, seq_len, self.embed_dim).to(x.device)
+		pos = torch.arange(0, seq_len, dtype=torch.float32)
+		enc = torch.exp((-math.log(10000.0)) * (torch.arange(0, self.embed_dim, step=2, dtype=torch.float32) / self.embed_dim))
+
+		# calculate positional encoding
+		prod = torch.outer(pos, enc)
+		pe[0, :, 0::2] = torch.sin(prod)
+		pe[0, :, 1::2] = torch.cos(prod)
+		pe = pe.expand(batch_size, -1, -1)
+
+		# apply as residual
+		x = x + pe
+		return x
+
+
+"""
+TimestepEncoding
+	Generates sinusoidal positional encodings
+	for diffusion time steps.
+"""
+class TimestepEncoding(nn.Module):
+	"""
+	TimestepEncoding.__init__
 		Constructs sinusoidal positional encodings
 		for diffusion time steps.
 	
@@ -46,7 +93,7 @@ class PositionalEncoding(nn.Module):
 
 
 	"""
-	PositionalEncoding.forward
+	TimestepEncoding.forward
 		Retrieves positional encoding for given
 		diffusion time step.
 	
@@ -244,3 +291,99 @@ class UNetLayer(nn.Module):
 
 		x = self.res_block2(x, pos_emb)
 		return self.scale(x), x
+
+
+"""
+TransformerLayer
+	Individual transformer layer employing
+	multiheaded attention and a feed forward.
+"""
+class TransformerLayer(nn.Module):
+	"""
+	TransformerLayer.__init__
+		Configures internal multiheaded attention
+		layer, feed forward layer, and batch
+		normalization.
+	
+	Args:
+		emb_dim: int embedding dimension
+		num_head: int number of heads
+	"""
+	def __init__(self, emb_dim, num_heads):
+		super().__init__()
+		# self.attn_layer = nn.MultiheadAttention(emb_dim, num_heads, batch_first=True)
+		self.attn_layer = MultiheadAttention(emb_dim, num_heads)
+
+		self.feed_forward = nn.Sequential(
+			nn.Linear(emb_dim, 1024),
+			nn.ReLU(),
+			nn.Linear(1024, emb_dim)
+		)
+
+		self.layer_norm = nn.LayerNorm(emb_dim)
+	
+
+	"""
+	TransformerLayer.forward
+		Runs a forward pass through the transformer
+		layer's self attention (with residual),
+		batch norm, feedfoward (with resudial),
+		and batch norm.
+	
+	Args:
+		x: torch.Tensor of size (B, N, D)
+		is_causal: boolean causal masking flag
+	
+	Returns:
+		torch.Tensor of size (B, N, D)
+	"""
+	def forward(self, x, is_causal):
+		# run through residual attention layer (with causal mask if specified)
+		# mask = torch.triu(torch.ones(x.shape[1], x.shape[1]), diagonal=1).bool().to(device)
+		# x = x + self.attn_layer(x, x, x, is_causal=is_causal, attn_mask=mask)[0]
+		x = x + self.attn_layer(x, is_causal)
+		x = self.layer_norm(x)
+
+		# run through feed forward network
+		x = x + self.feed_forward(x)
+		return self.layer_norm(x)
+
+
+"""
+Transformer
+	Full multiheaded and multilayered
+	transformer.
+"""
+class Transformer(nn.Module):
+	"""
+	Transformer.__init__
+		Configures interal list of
+		transformer layers.
+	
+	Args:
+		emb_dim: int embedding dimension
+		num_heads: int number of heads
+		num_layers: int number of layers
+	"""
+	def __init__(self, emb_dim, num_heads, num_layers):
+		super().__init__()
+		# build tranformer layers
+		self.transformer_layers = nn.ModuleList(
+			[TransformerLayer(emb_dim, num_heads) for _ in range(num_layers)]
+		)
+		
+	
+	"""
+	Transformer.forward
+		Runs a forward pass through the
+		transformer.
+	
+	Args:
+		x: torch.Tensor of size (B, N, D)
+		is_causal: boolean causal masking flag
+	"""
+	def forward(self, x, is_causal):
+		# run through layers
+		for layer in self.transformer_layers:
+			x = layer(x, is_causal)
+		return x
