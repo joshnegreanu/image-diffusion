@@ -7,7 +7,7 @@ import torch.nn as nn
 
 from einops import rearrange
 
-from models.utils import Transformer, PositionalEncoding
+from models.utils import Transformer, PositionalEncoding, TimestepEncoding
 
 # dynamically select device
 if torch.cuda.is_available():
@@ -19,7 +19,7 @@ else:
 
 
 class VisionTransformer(nn.Module):
-    def __init__(self, patch_size, in_channels, out_channels, embed_dim, num_layers, num_heads):
+    def __init__(self, patch_size, in_channels, out_channels, embed_dim, num_layers, num_heads, time_steps):
         super().__init__()
         
         # patch embedding layers
@@ -30,10 +30,13 @@ class VisionTransformer(nn.Module):
         # positional encodings
         self.pos_enc = PositionalEncoding(embed_dim=embed_dim)
 
+        # timestep encoding
+        self.time_enc = TimestepEncoding(embed_dim=embed_dim, time_steps=time_steps)
+
         # internal transformer
         self.transformer = Transformer(embed_dim, num_heads, num_layers)
     
-    def forward(self, x):
+    def forward(self, x, t):
         b, c, w, h = x.shape
         num_patches_h = h // self.patch_size
         num_patches_w = w // self.patch_size
@@ -49,7 +52,10 @@ class VisionTransformer(nn.Module):
             nw=num_patches_w
         )
         x = self.patch_in(x)
+
+        # positional and timestep encoding
         x = self.pos_enc(x)
+        x = x + self.time_enc(t)[None, None, :]
 
         # transformer pass
         x = self.transformer(x, is_causal=False)

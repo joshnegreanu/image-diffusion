@@ -24,6 +24,7 @@ from datetime import datetime
 from tqdm import tqdm
 
 from models.UNet import UNet
+from models.VisionTransformer import VisionTransformer
 from data.ImageDataset import ImageDataset
 
 # dynamically select device
@@ -41,20 +42,30 @@ Can be changed prior to training.
 """
 train_config = {
     'max_examples': 60000,
-    'image_size': 64,
+    'image_size': 32,
     'bs': 32,
     'lr': 0.00002,
     'weight_decay': 0.000001,
     'max_epochs': 100
 }
 
+# model_config = {
+#     'in_channels': 3,
+#     'out_channels': 3,
+#     'channels': [64, 128, 256, 512, 512, 384, 256],
+#     'scales': [-1, -1, -1, 1, 1, 1, 0],
+#     'attentions': [False, True, False, False, False, True, False],
+#     'time_steps': 1000
+# }
+
 model_config = {
+    'patch_size': 4,
     'in_channels': 3,
     'out_channels': 3,
-    'channels': [64, 128, 256, 512, 512, 384, 256],
-    'scales': [-1, -1, -1, 1, 1, 1, 0],
-    'attentions': [False, True, False, False, False, True, False],
-    'time_steps': 1000
+    'embed_dim': 256,
+    'num_layers': 8,
+    'num_heads': 8,
+    'time_steps': 100
 }
 
 
@@ -253,12 +264,22 @@ def main():
     )
 
     # create diffusion model
-    model = UNet(
+    # model = UNet(
+    #     in_channels=model_config['in_channels'],
+    #     out_channels=model_config['out_channels'],
+    #     channels=model_config['channels'],
+    #     scales=model_config['scales'],
+    #     attentions=model_config['attentions'],
+    #     time_steps=model_config['time_steps']
+    # ).to(device)
+
+    model = VisionTransformer(
+        patch_size=model_config['patch_size'],
         in_channels=model_config['in_channels'],
         out_channels=model_config['out_channels'],
-        channels=model_config['channels'],
-        scales=model_config['scales'],
-        attentions=model_config['attentions'],
+        embed_dim=model_config['embed_dim'],
+        num_layers=model_config['num_layers'],
+        num_heads=model_config['num_heads'],
         time_steps=model_config['time_steps']
     ).to(device)
 
