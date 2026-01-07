@@ -8,8 +8,6 @@ import pandas as pd
 import random
 import wandb
 
-import deepinv
-
 import sys
 import signal
 from functools import partial
@@ -60,8 +58,8 @@ train_config = {
 
 model_config = {
     'patch_size': 4,
-    'in_channels': 3,
-    'out_channels': 3,
+    'in_channels': 1,
+    'out_channels': 1,
     'embed_dim': 256,
     'num_layers': 8,
     'num_heads': 8,
@@ -235,35 +233,29 @@ main
     through training cycle.
 """
 def main():
-    # create dataset
-    # dataset = ImageDataset(
-    #     dataset_name="p2pfl/MNIST",
-    #     max_examples=train_config['max_examples'],
-    #     image_size=train_config['image_size'],
-    #     bs=train_config['bs']
-    # )
-
+    # image transformations
     transform = transforms.Compose([
         transforms.Resize((train_config['image_size'], train_config['image_size'])),
         transforms.ToTensor(),
-        transforms.Normalize((0.0,), (1.0,)),
+        # transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
+        transforms.Normalize(mean=[0.5], std=[0.5])
     ])
     
     # MNIST dataset
-    # dataloader = torch.utils.data.DataLoader(
-    #     datasets.MNIST(root="./data", train=True, download=True, transform=transform),
-    #     batch_size=train_config['bs'],
-    #     shuffle=True,
-    # )
-
-    # stanford cars dataset
     dataloader = torch.utils.data.DataLoader(
-        datasets.StanfordCars(root="./data", split='train', download=False, transform=transform),
+        datasets.MNIST(root="./data", train=True, download=True, transform=transform),
         batch_size=train_config['bs'],
         shuffle=True,
     )
 
-    # create diffusion model
+    # stanford cars dataset
+    # dataloader = torch.utils.data.DataLoader(
+    #     datasets.StanfordCars(root="./data", split='train', download=False, transform=transform),
+    #     batch_size=train_config['bs'],
+    #     shuffle=True,
+    # )
+
+    # create UNet diffusion model
     # model = UNet(
     #     in_channels=model_config['in_channels'],
     #     out_channels=model_config['out_channels'],
@@ -273,6 +265,7 @@ def main():
     #     time_steps=model_config['time_steps']
     # ).to(device)
 
+    # create VisionTransformer diffusion model
     model = VisionTransformer(
         patch_size=model_config['patch_size'],
         in_channels=model_config['in_channels'],
@@ -283,12 +276,7 @@ def main():
         time_steps=model_config['time_steps']
     ).to(device)
 
-    # model = deepinv.models.DiffUNet(
-    #     in_channels=1,
-    #     out_channels=1,
-    #     pretrained=None
-    # ).to(device)
-
+    # dry run to ensure proper dimensionality
     dry_run(
         model=model,
         bs=train_config['bs'],
