@@ -98,10 +98,10 @@ class TimestepEncoding(nn.Module):
 		diffusion time step.
 	
 	Args:
-		t: int diffusion time step
+		t: torch.Tensor (B,) diffusion time steps
 	
 	Returns:
-		torch.Tensor of size (D)
+		torch.Tensor of size (B, D)
 	"""
 	def forward(self, t):
 		return self.embeddings[t]
@@ -191,9 +191,9 @@ class MultiheadAttention(nn.Module):
 		bs = x.shape[0]
 
 		# run through query, key, and value transformations
-		q = self.q_linear(x).view(bs, -1, self.num_heads, self.head_dim)
-		k = self.k_linear(x).view(bs, -1, self.num_heads, self.head_dim)
-		v = self.v_linear(x).view(bs, -1, self.num_heads, self.head_dim)
+		q = self.q_linear(x).reshape(bs, -1, self.num_heads, self.head_dim)
+		k = self.k_linear(x).reshape(bs, -1, self.num_heads, self.head_dim)
+		v = self.v_linear(x).reshape(bs, -1, self.num_heads, self.head_dim)
 
 		# calculate attentions, concatenate multiple heads
 		attn = self.scaled_dot_product_attention(q, k, v, is_causal)
@@ -238,7 +238,7 @@ class ResBlock(nn.Module):
 		torch.Tensor of size (B, C, H, W)
 	"""
 	def forward(self, x, pos_emb):
-		x = x + pos_emb[None, :, None, None]
+		x = x + pos_emb[:, :, None, None]
 		return x + self.block_pass(x)
 
 

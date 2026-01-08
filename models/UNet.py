@@ -70,7 +70,7 @@ class UNet(nn.Module):
 	
 	Args:
 		x: torch.Tensor input feature map
-		t: torch.Tensor diffusion time step
+		t: torch.Tensor of size (B,) diffusion time steps
 	
 	Returns:
 		torch.Tensor of size (B, out_channels, H, W)

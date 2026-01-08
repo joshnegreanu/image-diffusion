@@ -39,7 +39,6 @@ Training and model configurations.
 Can be changed prior to training.
 """
 train_config = {
-    'max_examples': 60000,
     'image_size': 32,
     'bs': 32,
     'lr': 0.00002,
@@ -47,24 +46,24 @@ train_config = {
     'max_epochs': 100
 }
 
-# model_config = {
-#     'in_channels': 3,
-#     'out_channels': 3,
-#     'channels': [64, 128, 256, 512, 512, 384, 256],
-#     'scales': [-1, -1, -1, 1, 1, 1, 0],
-#     'attentions': [False, True, False, False, False, True, False],
-#     'time_steps': 1000
-# }
-
 model_config = {
-    'patch_size': 4,
-    'in_channels': 1,
-    'out_channels': 1,
-    'embed_dim': 256,
-    'num_layers': 8,
-    'num_heads': 8,
+    'in_channels': 3,
+    'out_channels': 3,
+    'channels': [64, 128, 256, 512, 512, 384, 256],
+    'scales': [-1, -1, -1, 1, 1, 1, 0],
+    'attentions': [False, True, False, False, False, True, False],
     'time_steps': 100
 }
+
+# model_config = {
+#     'patch_size': 4,
+#     'in_channels': 1,
+#     'out_channels': 1,
+#     'embed_dim': 256,
+#     'num_layers': 8,
+#     'num_heads': 8,
+#     'time_steps': 100
+# }
 
 
 """
@@ -79,7 +78,7 @@ dry_run
 """
 def dry_run(model, bs, image_size, in_channels, out_channels, time_steps):
     batch = torch.randn(bs, in_channels, image_size, image_size).to(device)
-    t = random.randrange(1, time_steps, 1)
+    t = torch.randint(0, time_steps, (bs,)).to(device)
     out = model(batch, t)
     assert out.shape == (bs, out_channels, image_size, image_size)
     print("[dry_run] passed")
@@ -182,20 +181,20 @@ def train(model, dataloader, time_steps):
         for batch_idx, batch in enumerate(dataloader):
             wandb.log({'learning-rate': scheduler.get_last_lr()[0]}, step=iteration)
 
-            # break up data
+            # pick out batch
             batch, labels = batch
+            batch = batch.to(device)
 
-            # pick noising rate
-            t = random.randrange(1, time_steps, 1)
+            # random sample batched noising rate
+            t = torch.randint(0, time_steps, (batch.size(0),), requires_grad=False).to(device).contiguous()
 
             # run batch through diffusion
-            batch = batch.to(device)
             noise = torch.randn(batch.size(), requires_grad=False).to(device)
-            diffuse_batch = math.sqrt(alpha_hat[t]) * batch + math.sqrt(1 - alpha_hat[t]) * noise
+            # diffuse_batch = torch.sqrt(alpha_hat[t]) * batch + torch.sqrt(1 - alpha_hat[t]) * noise
+            diffuse_batch = (alpha_hat[t].sqrt().reshape(-1, 1, 1, 1) * batch) + ((1 - alpha_hat[t]).sqrt().reshape(-1, 1, 1, 1) * noise)
 
             # forward pass
             noise_pred = model(diffuse_batch, t)
-            # noise_pred = model(diffuse_batch, torch.ones((32,)).to(device) * t, type_t='timestep')
 
             # compute L2 loss between predicted noise and true noise
             loss = criterion(noise_pred, noise)
@@ -237,35 +236,29 @@ def main():
     transform = transforms.Compose([
         transforms.Resize((train_config['image_size'], train_config['image_size'])),
         transforms.ToTensor(),
-        # transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]),
-        transforms.Normalize(mean=[0.5], std=[0.5])
+        # handle [-1, 1] normalization for grayscale vs RGB
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) if model_config['in_channels'] == 3 else transforms.Normalize(mean=[0.5], std=[0.5])
     ])
     
-    # MNIST dataset
+    # load CIFAR-10 dataset
     dataloader = torch.utils.data.DataLoader(
-        datasets.MNIST(root="./data", train=True, download=True, transform=transform),
+        datasets.CIFAR10(root="./data", train=True, download=True, transform=transform),
         batch_size=train_config['bs'],
         shuffle=True,
     )
 
-    # stanford cars dataset
-    # dataloader = torch.utils.data.DataLoader(
-    #     datasets.StanfordCars(root="./data", split='train', download=False, transform=transform),
-    #     batch_size=train_config['bs'],
-    #     shuffle=True,
-    # )
-
     # create UNet diffusion model
-    # model = UNet(
-    #     in_channels=model_config['in_channels'],
-    #     out_channels=model_config['out_channels'],
-    #     channels=model_config['channels'],
-    #     scales=model_config['scales'],
-    #     attentions=model_config['attentions'],
-    #     time_steps=model_config['time_steps']
-    # ).to(device)
+    model = UNet(
+        in_channels=model_config['in_channels'],
+        out_channels=model_config['out_channels'],
+        channels=model_config['channels'],
+        scales=model_config['scales'],
+        attentions=model_config['attentions'],
+        time_steps=model_config['time_steps']
+    ).to(device)
 
-    # create VisionTransformer diffusion model
+    """
+    # create VisionTransformer diffusion model (NOT WORKING CURRENTLY)
     model = VisionTransformer(
         patch_size=model_config['patch_size'],
         in_channels=model_config['in_channels'],
@@ -275,6 +268,7 @@ def main():
         num_heads=model_config['num_heads'],
         time_steps=model_config['time_steps']
     ).to(device)
+    """
 
     # dry run to ensure proper dimensionality
     dry_run(
