@@ -43,7 +43,8 @@ train_config = {
     'bs': 32,
     'lr': 0.00002,
     'weight_decay': 0.000001,
-    'max_epochs': 100
+    'max_epochs': 100,
+    'save_freq': 10
 }
 
 model_config = {
@@ -190,7 +191,6 @@ def train(model, dataloader, time_steps):
 
             # run batch through diffusion
             noise = torch.randn(batch.size(), requires_grad=False).to(device)
-            # diffuse_batch = torch.sqrt(alpha_hat[t]) * batch + torch.sqrt(1 - alpha_hat[t]) * noise
             diffuse_batch = (alpha_hat[t].sqrt().reshape(-1, 1, 1, 1) * batch) + ((1 - alpha_hat[t]).sqrt().reshape(-1, 1, 1, 1) * noise)
 
             # forward pass
@@ -210,17 +210,18 @@ def train(model, dataloader, time_steps):
             iteration += 1
             scheduler.step()
 
-        # save model each epoch
-        torch.save({
-            'epoch': epoch,
-            'loss': epoch_loss / epoch_len,
-            'model_state_dict': model.state_dict(),
-            'scheduler_state_dict': scheduler.state_dict(),
-            'optimizer_state_dict': optimizer.state_dict(),
-            'train_config': train_config,
-            'model_config': model_config},
-            f"./checkpoints/{project_name}/{run_name}/{run_name}_epoch{epoch}_end.pth"
-        )
+        # save model per save frequency
+        if (epoch + 1) % train_config['save_freq'] == 0:
+            torch.save({
+                'epoch': epoch,
+                'loss': epoch_loss / epoch_len,
+                'model_state_dict': model.state_dict(),
+                'scheduler_state_dict': scheduler.state_dict(),
+                'optimizer_state_dict': optimizer.state_dict(),
+                'train_config': train_config,
+                'model_config': model_config},
+                f"./checkpoints/{project_name}/{run_name}/{run_name}_epoch{epoch}_end.pth"
+            )
 
     wandb.finish()
     pbar.close()
