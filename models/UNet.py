@@ -37,30 +37,80 @@ class UNet(nn.Module):
 		scales: list of int scaling factor per layer
 		time_steps: int number of diffusion time steps
 	"""
-	def __init__(self, in_channels, out_channels, channels, attentions, scales, time_steps):
+	def __init__(self, in_channels, out_channels, num_layers, time_steps):
 		super().__init__()
-		self.num_layers = len(channels[:-1])
+		# auto-calculate encoder/decoder layers
+		down_channels = []
+		down_attns = []
+		for i in range(num_layers):
+			down_channels.append(2**(6+i))
+			down_attns.append(False)
+		down_attns[-1] = True
 
-		self.conv_in = nn.Conv2d(in_channels, channels[0], kernel_size=3, padding=1)
-		self.conv_out = nn.Conv2d(channels[-1], out_channels, kernel_size=3, padding=1)
-		self.relu = nn.ReLU()
+		up_channels = down_channels[::-1]
+		up_attns = down_attns[::-1]
 
-		# build layers dynamically
-		for i in range(self.num_layers):
+		# encoding/decoding bookkeeping
+		self.num_down = len(down_channels)
+		self.num_up = len(up_channels)
+
+		# get input into higher channel space
+		self.conv_in = nn.Conv2d(in_channels, down_channels[0]//2, kernel_size=3, padding=1)
+		self.conv_out = nn.Conv2d(up_channels[-1], out_channels, kernel_size=3, padding=1)
+
+		# build down layers dynamically
+		for i in range(self.num_down):
 			pos_enc = TimestepEncoding(
-				embed_dim=channels[i],
+				embed_dim=down_channels[i]//2,
 				time_steps=time_steps
 			)
 			layer = UNetLayer(
-				scale=scales[i],
-				num_channels=channels[i],
-				attention=attentions[i]
+				in_channels=down_channels[i]//2,
+				out_channels=down_channels[i],
+				scale=-1,
+				attention=down_attns[i]
 			)
-			setattr(self, f'pos_enc{i+1}', pos_enc)
-			setattr(self, f'layer{i+1}', layer)
+			setattr(self, f'down_pos_enc{i+1}', pos_enc)
+			setattr(self, f'down_layer{i+1}', layer)
 		
-		self.final_pos_enc = TimestepEncoding(embed_dim=channels[-1], time_steps=time_steps)
-		self.final_layer = UNetLayer(scale=scales[-1], num_channels=channels[-1], attention=attentions[i])
+		# bottleneck layer
+		self.bottleneck_pos_enc = TimestepEncoding(
+			embed_dim=up_channels[0],
+			time_steps=time_steps
+		)
+		self.bottleneck_layer = UNetLayer(
+			in_channels=down_channels[-1],
+			out_channels=up_channels[0],
+			scale=1,
+			attention=up_attns[0]
+		)
+
+		# build up layers dynamically
+		for i in range(self.num_up-1):
+			pos_enc = TimestepEncoding(
+				embed_dim=up_channels[i]*2,
+				time_steps=time_steps
+			)
+			layer = UNetLayer(
+				in_channels=up_channels[i]*2,
+				out_channels=up_channels[i]//2,
+				scale=1,
+				attention=up_attns[i]
+			)
+			setattr(self, f'up_pos_enc{i+1}', pos_enc)
+			setattr(self, f'up_layer{i+1}', layer)
+
+		# final layer
+		self.final_pos_enc = TimestepEncoding(
+			embed_dim=up_channels[-1]*2,
+			time_steps=time_steps
+		)
+		self.final_layer = UNetLayer(
+			in_channels=up_channels[-1]*2,
+			out_channels=up_channels[-1],
+			scale=0,
+			attention=up_attns[-1]
+		)
 	
 
 	"""
@@ -80,24 +130,28 @@ class UNet(nn.Module):
 
 		residuals = []
 		# downsampling path
-		for i in range(self.num_layers // 2):
-			pos_enc = getattr(self, f'pos_enc{i+1}')
-			layer = getattr(self, f'layer{i+1}')
-			pos_emb = pos_enc(t)
-			x, y = layer(x, pos_emb)
-			residuals.append(y)
+		for i in range(self.num_down):
+			pos_enc = getattr(self, f'down_pos_enc{i+1}')
+			layer = getattr(self, f'down_layer{i+1}')
+			x = x + pos_enc(t)[:, :, None, None]
+			x, r = layer(x)
+			residuals.append(r)
+		
+		x = x + self.bottleneck_pos_enc(t)[:, :, None, None]
+		x = self.bottleneck_layer(x)[0]
+		r = residuals[-1]
+		x = torch.concat((x, r), dim=1)
 
 		# upsampling path (with skip connections)
-		for i in range(self.num_layers // 2, self.num_layers):
-			pos_enc = getattr(self, f'pos_enc{i+1}')
-			layer = getattr(self, f'layer{i+1}')
-			pos_emb = pos_enc(t)
-			x = layer(x, pos_emb)[0]
-			y = residuals[self.num_layers - i - 1]
-			x = torch.concat((x, y), dim=1)
-		
+		for i in range(self.num_up-1):
+			pos_enc = getattr(self, f'up_pos_enc{i+1}')
+			layer = getattr(self, f'up_layer{i+1}')
+			x = x + pos_enc(t)[:, :, None, None]
+			x = layer(x)[0]
+			r = residuals[self.num_down-2-i]
+			x = torch.concat((x, r), dim=1)
+
 		# final layer
-		pos_emb = self.final_pos_enc(t)
-		x = self.final_layer(x, pos_emb)[0]
-		x = self.relu(x)
+		x = x + self.final_pos_enc(t)[:, :, None, None]
+		x = self.final_layer(x)[0]
 		return self.conv_out(x)

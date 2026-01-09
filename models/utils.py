@@ -119,23 +119,23 @@ class MultiheadAttention(nn.Module):
 		final linear layer.
 	
 	Args:
-		emb_dim: int size of embedding dimension
+		embed_dim: int size of embedding dimension
 		num_heads: int number of attention heads
 	"""
-	def __init__(self, emb_dim, num_heads):
+	def __init__(self, embed_dim, num_heads):
 		super().__init__()
 
-		assert emb_dim % num_heads == 0
-		self.emb_dim = emb_dim
-		self.head_dim = int(emb_dim / num_heads)
+		assert embed_dim % num_heads == 0
+		self.embed_dim = embed_dim
+		self.head_dim = int(embed_dim / num_heads)
 		self.num_heads = num_heads
 		
 		# set up key, query, and value linear transformations
-		self.q_linear = nn.Linear(emb_dim, emb_dim)
-		self.k_linear = nn.Linear(emb_dim, emb_dim)
-		self.v_linear = nn.Linear(emb_dim, emb_dim)
+		self.q_linear = nn.Linear(embed_dim, embed_dim)
+		self.k_linear = nn.Linear(embed_dim, embed_dim)
+		self.v_linear = nn.Linear(embed_dim, embed_dim)
 
-		self.concat_linear = nn.Linear(emb_dim, emb_dim)
+		self.concat_linear = nn.Linear(embed_dim, embed_dim)
 
 
 	"""
@@ -197,49 +197,48 @@ class MultiheadAttention(nn.Module):
 
 		# calculate attentions, concatenate multiple heads
 		attn = self.scaled_dot_product_attention(q, k, v, is_causal)
-		attn = attn.reshape(bs, -1, self.emb_dim)
+		attn = attn.reshape(bs, -1, self.embed_dim)
 		return self.concat_linear(attn)
 
 
-"""
-ResBlock
-	Residual block with two convolutional layers.
-"""
-class ResBlock(nn.Module):
-	"""
-	ResBlock.__init__
-		Constructs two convolutional layers
-		with ReLU activations.
+# """
+# ResBlock
+# 	Residual block with two convolutional layers.
+# """
+# class ResBlock(nn.Module):
+# 	"""
+# 	ResBlock.__init__
+# 		Constructs two convolutional layers
+# 		with ReLU activations.
 	
-	Args:
-		num_channels: int number of input/output channels
-	"""
-	def __init__(self, num_channels):
-		super().__init__()
+# 	Args:
+# 		num_channels: int number of input/output channels
+# 	"""
+# 	def __init__(self, in_channels, out_channels):
+# 		super().__init__()
 
-		self.block_pass = nn.Sequential(
-			nn.Conv2d(in_channels=num_channels, out_channels=num_channels, kernel_size=3, padding=1),
-			nn.ReLU(inplace=True),
-			nn.Conv2d(in_channels=num_channels, out_channels=num_channels, kernel_size=3, padding=1),
-			nn.ReLU(inplace=True)
-		)
+# 		self.block_pass = nn.Sequential(
+# 			nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1),
+# 			nn.ReLU(inplace=True),
+# 			nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1),
+# 			nn.ReLU(inplace=True)
+# 		)
 	
 
-	"""
-	ResBlock.forward
-		Runs a forward pass through the residual block,
-		applying timestep positional embedding.
+# 	"""
+# 	ResBlock.forward
+# 		Runs a forward pass through the residual block,
+# 		applying timestep positional embedding.
 	
-	Args:
-		x: torch.Tensor input feature map
-		pos_emb: torch.Tensor positional embedding to add
+# 	Args:
+# 		x: torch.Tensor input feature map
+# 		pos_enc: torch.Tensor positional embedding to add
 	
-	Returns:
-		torch.Tensor of size (B, C, H, W)
-	"""
-	def forward(self, x, pos_emb):
-		x = x + pos_emb[:, :, None, None]
-		return x + self.block_pass(x)
+# 	Returns:
+# 		torch.Tensor of size (B, C, H, W)
+# 	"""
+# 	def forward(self, x):
+# 		return x + self.block_pass(x)
 
 
 """
@@ -249,21 +248,24 @@ UNetLayer
 	and up-/down-sampling.
 """
 class UNetLayer(nn.Module):
-	def __init__(self, num_channels, scale, attention):
+	def __init__(self, in_channels, out_channels, scale, attention):
 		super().__init__()
-		self.res_block1 = ResBlock(num_channels=num_channels)
-		self.res_block2 = ResBlock(num_channels=num_channels)
+
+		# handle scaling
+		self.scale = None
+		if scale == 1:
+			self.scale = nn.ConvTranspose2d(out_channels, out_channels, kernel_size=4, stride=2, padding=1)
+		elif scale == -1:
+			self.scale = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=2, padding=1)
+		
+		self.relu = nn.ReLU(inplace=True)
 
 		self.attention = None
 		if attention:
-			self.attention = MultiheadAttention(emb_dim=num_channels, num_heads=4)
+			self.attention = MultiheadAttention(embed_dim=out_channels, num_heads=4)
 
-		if scale == 1:
-			self.scale = nn.ConvTranspose2d(num_channels, num_channels//2, kernel_size=4, stride=2, padding=1)
-		elif scale == -1:
-			self.scale = nn.Conv2d(num_channels, num_channels*2, kernel_size=3, stride=2, padding=1)
-		else:
-			self.scale = nn.Identity()
+		self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1)
+		self.conv2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1)
 
 
 	"""
@@ -274,13 +276,14 @@ class UNetLayer(nn.Module):
 	
 	Args:
 		x: torch.Tensor input feature map
-		pos_emb: torch.Tensor positional embedding to add
+		pos_enc: torch.Tensor positional embedding to add
 	
 	Returns:
 		torch.Tensor of size (B, C', H', W'), torch.Tensor of size (B, C, H, W)
 	"""
-	def forward(self, x, pos_emb):
-		x = self.res_block1(x, pos_emb)
+	def forward(self, x):
+		x = self.conv1(x)
+		x = self.relu(x)
 		
 		# apply full self-attention if enabled
 		if self.attention:
@@ -289,8 +292,14 @@ class UNetLayer(nn.Module):
 			x = self.attention(x, is_causal=False)
 			x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
 
-		x = self.res_block2(x, pos_emb)
-		return self.scale(x), x
+		x = self.conv2(x)
+		x = self.relu(x)
+
+		# add residual only if no scaling
+		r = x
+		if self.scale:
+			x = self.scale(x)
+		return x, r
 
 
 """
@@ -306,21 +315,21 @@ class TransformerLayer(nn.Module):
 		normalization.
 	
 	Args:
-		emb_dim: int embedding dimension
+		embed_dim: int embedding dimension
 		num_head: int number of heads
 	"""
-	def __init__(self, emb_dim, num_heads):
+	def __init__(self, embed_dim, num_heads):
 		super().__init__()
-		# self.attn_layer = nn.MultiheadAttention(emb_dim, num_heads, batch_first=True)
-		self.attn_layer = MultiheadAttention(emb_dim, num_heads)
+		# self.attn_layer = nn.MultiheadAttention(embed_dim, num_heads, batch_first=True)
+		self.attn_layer = MultiheadAttention(embed_dim, num_heads)
 
 		self.feed_forward = nn.Sequential(
-			nn.Linear(emb_dim, 1024),
+			nn.Linear(embed_dim, 1024),
 			nn.ReLU(),
-			nn.Linear(1024, emb_dim)
+			nn.Linear(1024, embed_dim)
 		)
 
-		self.layer_norm = nn.LayerNorm(emb_dim)
+		self.layer_norm = nn.LayerNorm(embed_dim)
 	
 
 	"""
@@ -339,8 +348,6 @@ class TransformerLayer(nn.Module):
 	"""
 	def forward(self, x, is_causal):
 		# run through residual attention layer (with causal mask if specified)
-		# mask = torch.triu(torch.ones(x.shape[1], x.shape[1]), diagonal=1).bool().to(device)
-		# x = x + self.attn_layer(x, x, x, is_causal=is_causal, attn_mask=mask)[0]
 		x = x + self.attn_layer(x, is_causal)
 		x = self.layer_norm(x)
 
@@ -361,15 +368,15 @@ class Transformer(nn.Module):
 		transformer layers.
 	
 	Args:
-		emb_dim: int embedding dimension
+		embed_dim: int embedding dimension
 		num_heads: int number of heads
 		num_layers: int number of layers
 	"""
-	def __init__(self, emb_dim, num_heads, num_layers):
+	def __init__(self, embed_dim, num_heads, num_layers):
 		super().__init__()
 		# build tranformer layers
 		self.transformer_layers = nn.ModuleList(
-			[TransformerLayer(emb_dim, num_heads) for _ in range(num_layers)]
+			[TransformerLayer(embed_dim, num_heads) for _ in range(num_layers)]
 		)
 		
 	

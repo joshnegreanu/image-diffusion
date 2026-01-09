@@ -39,7 +39,7 @@ Training and model configurations.
 Can be changed prior to training.
 """
 train_config = {
-    'image_size': 32,
+    'image_size': 128,
     'bs': 32,
     'lr': 0.00002,
     'weight_decay': 0.000001,
@@ -50,10 +50,8 @@ train_config = {
 model_config = {
     'in_channels': 3,
     'out_channels': 3,
-    'channels': [64, 128, 256, 512, 512, 384, 256],
-    'scales': [-1, -1, -1, 1, 1, 1, 0],
-    'attentions': [False, True, False, False, False, True, False],
-    'time_steps': 100
+    'num_layers': 6,
+    'time_steps': 50
 }
 
 # model_config = {
@@ -238,12 +236,13 @@ def main():
         transforms.Resize((train_config['image_size'], train_config['image_size'])),
         transforms.ToTensor(),
         # handle [-1, 1] normalization for grayscale vs RGB
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) if model_config['in_channels'] == 3 else transforms.Normalize(mean=[0.5], std=[0.5])
+        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) if model_config['in_channels'] == 3 else
+            transforms.Normalize(mean=[0.5], std=[0.5])
     ])
     
     # load CIFAR-10 dataset
     dataloader = torch.utils.data.DataLoader(
-        datasets.CIFAR10(root="./data", train=True, download=True, transform=transform),
+        datasets.StanfordCars(root="./data", split='train', download=False, transform=transform),
         batch_size=train_config['bs'],
         shuffle=True,
     )
@@ -252,10 +251,8 @@ def main():
     model = UNet(
         in_channels=model_config['in_channels'],
         out_channels=model_config['out_channels'],
-        channels=model_config['channels'],
-        scales=model_config['scales'],
-        attentions=model_config['attentions'],
-        time_steps=model_config['time_steps']
+        num_layers=model_config['num_layers'],
+        time_steps=model_config['time_steps'],
     ).to(device)
 
     """
