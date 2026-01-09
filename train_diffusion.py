@@ -40,8 +40,8 @@ Can be changed prior to training.
 """
 train_config = {
     'image_size': 128,
-    'bs': 32,
-    'lr': 0.00002,
+    'batch_size': 32,
+    'learning_rate': 0.00002,
     'weight_decay': 0.000001,
     'max_epochs': 100,
     'save_freq': 10
@@ -51,7 +51,7 @@ model_config = {
     'in_channels': 3,
     'out_channels': 3,
     'num_layers': 6,
-    'time_steps': 50
+    'time_steps': 300
 }
 
 # model_config = {
@@ -72,14 +72,14 @@ dry_run
 
     Args:
         model: torch.nn.Module diffusion model
-        bs: int batch size
+        batch_size: int batch size
         image_size: int size of vocab
 """
-def dry_run(model, bs, image_size, in_channels, out_channels, time_steps):
-    batch = torch.randn(bs, in_channels, image_size, image_size).to(device)
-    t = torch.randint(0, time_steps, (bs,)).to(device)
+def dry_run(model, batch_size, image_size, in_channels, out_channels, time_steps):
+    batch = torch.randn(batch_size, in_channels, image_size, image_size).to(device)
+    t = torch.randint(0, time_steps, (batch_size,)).to(device)
     out = model(batch, t)
-    assert out.shape == (bs, out_channels, image_size, image_size)
+    assert out.shape == (batch_size, out_channels, image_size, image_size)
     print("[dry_run] passed")
 
 
@@ -139,9 +139,8 @@ def train(model, dataloader, time_steps):
     os.makedirs(f"./checkpoints/{project_name}/{run_name}", exist_ok=True)
 
     # optimizer and criterion
-    optimizer = optim.AdamW(model.parameters(), lr=train_config['lr'], weight_decay=train_config['weight_decay'])
+    optimizer = optim.AdamW(model.parameters(), lr=train_config['learning_rate'], weight_decay=train_config['weight_decay'])
     criterion = nn.MSELoss()
-    # criterion = deepinv.loss.MSE(reduction='mean')
 
     # diffusion scheduler
     beta = torch.linspace(1e-4, 0.02, time_steps, requires_grad=False).to(device)
@@ -234,16 +233,13 @@ def main():
     # image transformations
     transform = transforms.Compose([
         transforms.Resize((train_config['image_size'], train_config['image_size'])),
-        transforms.ToTensor(),
-        # handle [-1, 1] normalization for grayscale vs RGB
-        transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5]) if model_config['in_channels'] == 3 else
-            transforms.Normalize(mean=[0.5], std=[0.5])
+        transforms.ToTensor()
     ])
     
-    # load CIFAR-10 dataset
+    # load stanford cars dataset
     dataloader = torch.utils.data.DataLoader(
         datasets.StanfordCars(root="./data", split='train', download=False, transform=transform),
-        batch_size=train_config['bs'],
+        batch_size=train_config['batch_size'],
         shuffle=True,
     )
 
@@ -271,7 +267,7 @@ def main():
     # dry run to ensure proper dimensionality
     dry_run(
         model=model,
-        bs=train_config['bs'],
+        bs=train_config['batch_size'],
         image_size=train_config['image_size'],
         in_channels=model_config['in_channels'],
         out_channels=model_config['out_channels'],
