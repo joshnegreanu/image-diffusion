@@ -43,15 +43,15 @@ train_config = {
     'batch_size': 32,
     'learning_rate': 0.00002,
     'weight_decay': 0.000001,
-    'max_epochs': 100,
-    'save_freq': 10
+    'max_epochs': 500,
+    'save_freq': 100
 }
 
 model_config = {
     'in_channels': 3,
     'out_channels': 3,
     'num_layers': 6,
-    'time_steps': 300
+    'time_steps': 100
 }
 
 # model_config = {
@@ -143,7 +143,7 @@ def train(model, dataloader, time_steps):
     criterion = nn.MSELoss()
 
     # diffusion scheduler
-    beta = torch.linspace(1e-4, 0.02, time_steps, requires_grad=False).to(device)
+    beta = torch.linspace(1e-4, 6e-2, time_steps, requires_grad=False).to(device)
     alpha = 1.0 - beta
     alpha_hat = torch.cumprod(alpha, dim=0).requires_grad_(False).to(device)
 
@@ -233,7 +233,9 @@ def main():
     # image transformations
     transform = transforms.Compose([
         transforms.Resize((train_config['image_size'], train_config['image_size'])),
-        transforms.ToTensor()
+        transforms.ToTensor(),
+        # normalize to [-1, 1]
+        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)) if model_config['in_channels'] == 3 else transforms.Normalize((0.5,), (0.5,))
     ])
     
     # load stanford cars dataset
