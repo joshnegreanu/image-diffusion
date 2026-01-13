@@ -248,7 +248,7 @@ UNetLayer
 	and up-/down-sampling.
 """
 class UNetLayer(nn.Module):
-	def __init__(self, in_channels, out_channels, scale, attention):
+	def __init__(self, in_channels, out_channels, scale, attention, time_steps):
 		super().__init__()
 
 		# handle scaling
@@ -267,6 +267,16 @@ class UNetLayer(nn.Module):
 		self.conv1 = nn.Conv2d(in_channels=in_channels, out_channels=out_channels, kernel_size=3, padding=1)
 		self.conv2 = nn.Conv2d(in_channels=out_channels, out_channels=out_channels, kernel_size=3, padding=1)
 
+		# timestep positional encodings
+		self.pos_enc1 = TimestepEncoding(
+			embed_dim=in_channels,
+			time_steps=time_steps
+		)
+		self.pos_enc2 = TimestepEncoding(
+			embed_dim=out_channels,
+			time_steps=time_steps
+		)
+
 
 	"""
 	UNetLayer.forward
@@ -281,7 +291,11 @@ class UNetLayer(nn.Module):
 	Returns:
 		torch.Tensor of size (B, C', H', W'), torch.Tensor of size (B, C, H, W)
 	"""
-	def forward(self, x):
+	def forward(self, x, t):
+		# add first positional encoding
+		x = x + self.pos_enc1(t)[:, :, None, None]
+
+		# first convolution
 		x = self.conv1(x)
 		x = self.relu(x)
 		
@@ -291,7 +305,9 @@ class UNetLayer(nn.Module):
 			x = rearrange(x, 'b c h w -> b (h w) c')
 			x = self.attention(x, is_causal=False)
 			x = rearrange(x, 'b (h w) c -> b c h w', h=h, w=w)
-
+		
+		# add second positional encoding
+		x = x + self.pos_enc2(t)[:, :, None, None]
 		x = self.conv2(x)
 		x = self.relu(x)
 

@@ -51,7 +51,7 @@ model_config = {
     'in_channels': 3,
     'out_channels': 3,
     'num_layers': 6,
-    'time_steps': 100
+    'time_steps': 1000
 }
 
 # model_config = {

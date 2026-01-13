@@ -60,56 +60,42 @@ class UNet(nn.Module):
 
 		# build down layers dynamically
 		for i in range(self.num_down):
-			pos_enc = TimestepEncoding(
-				embed_dim=down_channels[i]//2,
-				time_steps=time_steps
-			)
 			layer = UNetLayer(
 				in_channels=down_channels[i]//2,
 				out_channels=down_channels[i],
 				scale=-1,
-				attention=down_attns[i]
+				attention=down_attns[i],
+				time_steps=time_steps
 			)
-			setattr(self, f'down_pos_enc{i+1}', pos_enc)
 			setattr(self, f'down_layer{i+1}', layer)
 		
 		# bottleneck layer
-		self.bottleneck_pos_enc = TimestepEncoding(
-			embed_dim=up_channels[0],
-			time_steps=time_steps
-		)
 		self.bottleneck_layer = UNetLayer(
 			in_channels=down_channels[-1],
 			out_channels=up_channels[0],
 			scale=1,
-			attention=up_attns[0]
+			attention=up_attns[0],
+			time_steps=time_steps
 		)
 
 		# build up layers dynamically
 		for i in range(self.num_up-1):
-			pos_enc = TimestepEncoding(
-				embed_dim=up_channels[i]*2,
-				time_steps=time_steps
-			)
 			layer = UNetLayer(
 				in_channels=up_channels[i]*2,
 				out_channels=up_channels[i]//2,
 				scale=1,
-				attention=up_attns[i]
+				attention=up_attns[i],
+				time_steps=time_steps
 			)
-			setattr(self, f'up_pos_enc{i+1}', pos_enc)
 			setattr(self, f'up_layer{i+1}', layer)
 
 		# final layer
-		self.final_pos_enc = TimestepEncoding(
-			embed_dim=up_channels[-1]*2,
-			time_steps=time_steps
-		)
 		self.final_layer = UNetLayer(
 			in_channels=up_channels[-1]*2,
 			out_channels=up_channels[-1],
 			scale=0,
-			attention=up_attns[-1]
+			attention=up_attns[-1],
+			time_steps=time_steps
 		)
 	
 
@@ -131,27 +117,21 @@ class UNet(nn.Module):
 		residuals = []
 		# downsampling path
 		for i in range(self.num_down):
-			pos_enc = getattr(self, f'down_pos_enc{i+1}')
 			layer = getattr(self, f'down_layer{i+1}')
-			x = x + pos_enc(t)[:, :, None, None]
-			x, r = layer(x)
+			x, r = layer(x, t)
 			residuals.append(r)
 		
-		x = x + self.bottleneck_pos_enc(t)[:, :, None, None]
-		x = self.bottleneck_layer(x)[0]
+		x = self.bottleneck_layer(x, t)[0]
 		r = residuals[-1]
 		x = torch.concat((x, r), dim=1)
 
 		# upsampling path (with skip connections)
 		for i in range(self.num_up-1):
-			pos_enc = getattr(self, f'up_pos_enc{i+1}')
 			layer = getattr(self, f'up_layer{i+1}')
-			x = x + pos_enc(t)[:, :, None, None]
-			x = layer(x)[0]
+			x = layer(x, t)[0]
 			r = residuals[self.num_down-2-i]
 			x = torch.concat((x, r), dim=1)
 
 		# final layer
-		x = x + self.final_pos_enc(t)[:, :, None, None]
-		x = self.final_layer(x)[0]
+		x = self.final_layer(x, t)[0]
 		return self.conv_out(x)
